@@ -9,6 +9,7 @@ from .db import Database
 from .config import Settings
 from .shared import is_admin,client,markup,maintenance
 from .kosell import KOSellError
+from .yoomoney import quickpay_url
 class S(StatesGroup): api=State(); markup=State(); reply=State(); pay_edit=State()
 def menu():
     kb=InlineKeyboardBuilder()
@@ -103,8 +104,16 @@ def register(dp:Dispatcher,bot:Bot,db:Database,s:Settings):
         try: amount=round(float((m.text or '').replace(',','.')),2)
         except: return await m.answer('Введите сумму числом.')
         if amount<50: return await m.answer('Минимум 50 ₽.')
-        data=await state.get_data(); db.update_payment_amount(data['payment_id'],amount); await state.clear()
-        await m.answer(f'✅ Сумма пополнения изменена на <b>{amount:.2f} ₽</b>.',reply_markup=menu(),parse_mode='HTML')
+        data=await state.get_data(); pid=data['payment_id']; db.update_payment_amount(pid,amount); row=db.payment(pid); await state.clear()
+        msg=f'✅ Сумма пополнения изменена на <b>{amount:.2f} ₽</b>.'
+        if row and s.yoomoney_wallet and s.public_base_url:
+            gross=round(amount/0.97,2)
+            url=quickpay_url(s.yoomoney_wallet,gross,str(row['label']),s.public_base_url+'/payment/return')
+            kb=InlineKeyboardBuilder(); kb.button(text='💳 Новая ссылка оплаты',url=url); kb.button(text='💳 Пополнения',callback_data='payments'); kb.adjust(1)
+            try: await bot.send_message(int(row['telegram_id']),f'💳 <b>Сумма пополнения изменена администратором</b>\n\nК оплате: <b>{gross:.2f} ₽</b>\nНа баланс: <b>{amount:.2f} ₽</b>.',reply_markup=kb.as_markup(),parse_mode='HTML')
+            except: pass
+            return await m.answer(msg+' Новая ссылка отправлена пользователю.',reply_markup=menu(),parse_mode='HTML')
+        await m.answer(msg,reply_markup=menu(),parse_mode='HTML')
     @dp.message(S.api)
     async def api(m:Message,state:FSMContext):
         if not is_admin(m.from_user.id,s): return
