@@ -20,7 +20,7 @@ def create_app(db,settings,main_bot=None):
         if not row: return JSONResponse({'ok':True})
         try: amount=round(float(form.get('amount') or 0),2)
         except: return JSONResponse({'ok':True})
-        expected_net=round(float(row['amount_rub'])*0.97,2)
+        expected_net=round(float(row['amount_rub']),2)
         if abs(amount-expected_net)>0.01: return JSONResponse({'ok':True})
         credited,uid,added=db.credit_payment(row['payment_id'],expected_net)
         if credited and main_bot and uid:
