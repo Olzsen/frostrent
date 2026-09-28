@@ -128,6 +128,14 @@ class Database:
         with self.conn() as c: return c.execute("SELECT * FROM payments WHERE payment_id=?",(payment_id,)).fetchone()
     def payment_by_label(self,label):
         with self.conn() as c: return c.execute("SELECT * FROM payments WHERE label=?",(label,)).fetchone()
+    def recent_payments(self,limit=30):
+        with self.conn() as c: return c.execute("SELECT * FROM payments ORDER BY created_at DESC LIMIT ?",(limit,)).fetchall()
+    def update_payment_amount(self,payment_id,amount):
+        with self.conn() as c:
+            c.execute("UPDATE payments SET amount_rub=? WHERE payment_id=? AND status='pending'",(amount,payment_id)); c.commit()
+    def cancel_payment(self,payment_id):
+        with self.conn() as c:
+            c.execute("UPDATE payments SET status='cancelled' WHERE payment_id=? AND status='pending'",(payment_id,)); c.commit()
     def credit_payment(self,payment_id,expected_received_amount=None):
         with self.conn() as c:
             c.execute("BEGIN IMMEDIATE"); row=c.execute("SELECT * FROM payments WHERE payment_id=?",(payment_id,)).fetchone()
