@@ -141,7 +141,7 @@ class Database:
             c.execute("BEGIN IMMEDIATE"); row=c.execute("SELECT * FROM payments WHERE payment_id=?",(payment_id,)).fetchone()
             if not row or row['status']=='credited':
                 c.rollback(); return False,(int(row['telegram_id']) if row else None),(float(row['amount_rub']) if row else None)
-            if expected_received_amount is not None and abs(float(expected_received_amount)-round(float(row['amount_rub'])*0.97,2))>0.01:
+            if expected_received_amount is not None and abs(float(expected_received_amount)-round(float(row['amount_rub']),2))>0.01:
                 c.rollback(); return False,None,None
             uid=int(row['telegram_id']); amount=float(row['amount_rub'])
             c.execute("INSERT OR IGNORE INTO balances(telegram_id,balance_rub) VALUES(?,0)",(uid,))
