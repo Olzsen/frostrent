@@ -23,7 +23,7 @@ def menu():
 def back():
     kb=InlineKeyboardBuilder(); kb.button(text='⬅️ Назад',callback_data='back'); return kb.as_markup()
 
-def register(dp:Dispatcher,bot:Bot,db:Database,s:Settings):
+def register(dp:Dispatcher,bot:Bot,main_bot:Bot,db:Database,s:Settings):
     @dp.message(Command('start'))
     async def start(m:Message):
         if not is_admin(m.from_user.id,s): return
@@ -97,26 +97,55 @@ def register(dp:Dispatcher,bot:Bot,db:Database,s:Settings):
     async def support(c:CallbackQuery):
         if not is_admin(c.from_user.id,s): return
         await c.answer()
-        rows=db.open_tickets(30); kb=InlineKeyboardBuilder(); lines=['🆘 <b>Открытые тикеты</b>','']
+        rows=db.open_tickets(30)
+        kb=InlineKeyboardBuilder()
+        lines=['🆘 <b>Открытые тикеты</b>','']
+        if not rows:
+            lines.append('Открытых тикетов нет.')
         for r in rows:
             lines.append(f'#{r["id"]} • <code>{r["telegram_id"]}</code> • {r["created_at"]}')
-            kb.button(text=f'↩️ Ответить #{r["id"]}',callback_data=f'reply:{r["id"]}')
-            kb.button(text=f'✅ Закрыть #{r["id"]}',callback_data=f'close:{r["id"]}')
-        kb.button(text='⬅️ Назад',callback_data='back'); kb.adjust(1)
-        await c.message.edit_text('\n'.join(lines) or 'Открытых тикетов нет.',reply_markup=kb.as_markup(),parse_mode='HTML')
+            kb.button(text=f'📖 Открыть #{r["id"]}',callback_data=f'viewticket:{r["id"]}')
+        kb.button(text='⬅️ Назад',callback_data='back')
+        kb.adjust(1)
+        await c.message.edit_text('\n'.join(lines),reply_markup=kb.as_markup(),parse_mode='HTML')
+
+    @dp.callback_query(F.data.startswith('viewticket:'))
+    async def view_ticket(c:CallbackQuery):
+        if not is_admin(c.from_user.id,s): return
+        tid=int(c.data.split(':',1)[1]); t=db.ticket(tid)
+        if not t: return await c.answer('Тикет не найден',show_alert=True)
+        await c.answer()
+        history=db.support_history(tid,50)
+        lines=[f'🆘 <b>Тикет #{tid}</b>',f'👤 Пользователь: <code>{t["telegram_id"]}</code>',f'📌 Статус: <b>{t["status"]}</b>','']
+        if history:
+            for row in history:
+                who='👤 Пользователь' if not int(row['is_admin']) else '🛠 Админ'
+                lines.append(f'<b>{who}</b>\n{html.escape(str(row["text"] or ""))}\n')
+        else:
+            lines.append('Сообщений пока нет.')
+        kb=InlineKeyboardBuilder()
+        if t['status']=='open':
+            kb.button(text='↩️ Ответить',callback_data=f'reply:{tid}')
+            kb.button(text='✅ Закрыть',callback_data=f'close:{tid}')
+        kb.button(text='⬅️ Тикеты',callback_data='support')
+        kb.adjust(1)
+        await c.message.edit_text('\n'.join(lines),reply_markup=kb.as_markup(),parse_mode='HTML')
 
     @dp.callback_query(F.data.startswith('reply:'))
     async def reply_start(c:CallbackQuery,state:FSMContext):
         if not is_admin(c.from_user.id,s): return
         tid=int(c.data.split(':',1)[1]); t=db.ticket(tid)
         if not t or t['status']!='open': return await c.answer('Тикет закрыт — отвечать нельзя',show_alert=True)
-        await c.answer(); await state.update_data(ticket_id=tid); await state.set_state(S.reply)
-        await c.message.answer(f'Ответ для тикета #{tid}:')
+        await c.answer()
+        await state.update_data(ticket_id=tid)
+        await state.set_state(S.reply)
+        await c.message.answer(f'↩️ <b>Ответ для тикета #{tid}</b>\nНапиши сообщение:',parse_mode='HTML')
 
     @dp.callback_query(F.data.startswith('close:'))
     async def close(c:CallbackQuery):
         if not is_admin(c.from_user.id,s): return
-        tid=int(c.data.split(':',1)[1]); ok=db.close_ticket(tid); await c.answer('Тикет закрыт' if ok else 'Тикет уже закрыт')
+        tid=int(c.data.split(':',1)[1]); ok=db.close_ticket(tid)
+        await c.answer('Тикет закрыт' if ok else 'Тикет уже закрыт')
         await c.message.edit_text('✅ Тикет закрыт.',reply_markup=menu(),parse_mode='HTML')
 
     @dp.message(S.reply)
@@ -128,9 +157,12 @@ def register(dp:Dispatcher,bot:Bot,db:Database,s:Settings):
         text=m.text or m.caption or '[медиа]'
         if not db.add_support_message(tid,m.from_user.id,text,True):
             await state.clear(); return await m.answer('❌ Тикет уже закрыт. Ответить нельзя.',reply_markup=menu())
-        try: await bot.send_message(int(t['telegram_id']),f'🆘 <b>Ответ поддержки #{tid}</b>\n\n{html.escape(text)}',parse_mode='HTML')
-        except: pass
-        await state.clear(); await m.answer('✅ Ответ отправлен.',reply_markup=menu())
+        try:
+            await main_bot.send_message(int(t['telegram_id']),f'🆘 <b>Ответ поддержки #{tid}</b>\n\n{html.escape(text)}',parse_mode='HTML')
+        except Exception:
+            pass
+        await state.clear()
+        await m.answer('✅ Ответ отправлен пользователю.',reply_markup=menu())
 
     @dp.callback_query(F.data=='api')
     async def api_start(c:CallbackQuery,state:FSMContext):
