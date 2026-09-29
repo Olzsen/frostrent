@@ -14,6 +14,7 @@ class Settings:
     real_rent_enabled:bool
     yoomoney_wallet:str
     yoomoney_secret:str
+    yoomoney_api_token:str
     public_base_url:str
     web_port:int
 
@@ -25,6 +26,13 @@ def load_settings():
     if not admins: raise RuntimeError('ADMIN_IDS не задан')
     db=Path(os.getenv('DB_PATH','./data/frostrent.sqlite3')).expanduser(); db.parent.mkdir(parents=True,exist_ok=True)
     rent=os.getenv('REAL_RENT_ENABLED','true').strip().lower() in {'1','true','yes','on','y'}
-    return Settings(mt,at,admins,db,os.getenv('KOSELL_BASE_URL','https://kosell.store').rstrip('/'),rent,
-        os.getenv('YOOMONEY_WALLET','').strip(),os.getenv('YOOMONEY_HTTP_SECRET','').strip(),
-        os.getenv('PUBLIC_BASE_URL','').strip().rstrip('/'),int(os.getenv('WEB_PORT','8080')))
+    return Settings(
+        mt,at,admins,db,
+        os.getenv('KOSELL_BASE_URL','https://kosell.store').rstrip('/'),
+        rent,
+        os.getenv('YOOMONEY_WALLET','').strip(),
+        os.getenv('YOOMONEY_HTTP_SECRET','').strip(),
+        os.getenv('YOOMONEY_API_TOKEN','').strip(),
+        os.getenv('PUBLIC_BASE_URL','').strip().rstrip('/'),
+        int(os.getenv('WEB_PORT','8080')),
+    )
