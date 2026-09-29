@@ -13,7 +13,7 @@ from .kosell import KOSellError
 from .state import ORDERS, Order
 from .yoomoney import quickpay_url
 
-MIN_TOPUP=50.0
+DEFAULT_TOPUP=50.0
 REF_PERCENT=1.0
 
 class S(StatesGroup):
@@ -55,13 +55,15 @@ def register(dp:Dispatcher, bot:Bot, db:Database, s:Settings):
     @dp.callback_query(F.data=='topup')
     async def topup(c:CallbackQuery,state:FSMContext):
         await c.answer(); await state.set_state(S.topup)
-        await c.message.answer(f'➕ Введите сумму пополнения. Минимум <b>{MIN_TOPUP:.0f} ₽</b>.',parse_mode='HTML')
+        minimum=db.topup_min()
+        await c.message.answer(f'➕ Введите сумму пополнения. Минимум <b>{minimum:.2f} ₽</b>.',parse_mode='HTML')
 
     @dp.message(S.topup)
     async def topup_amount(m:Message,state:FSMContext):
         try: amount=round(float((m.text or '').replace(',','.')),2)
         except: return await m.answer('❌ Введите сумму числом.')
-        if amount<MIN_TOPUP: return await m.answer(f'❌ Минимум {MIN_TOPUP:.0f} ₽.')
+        minimum=db.topup_min()
+        if amount<minimum: return await m.answer(f'❌ Минимум {minimum:.2f} ₽.')
         if not s.yoomoney_wallet or not s.public_base_url or not s.yoomoney_secret:
             await state.clear(); return await m.answer('⚠️ Пополнение временно недоступно.')
         pid=uuid.uuid4().hex
