@@ -12,6 +12,7 @@ from .formatting import marked, money, stock
 from .kosell import KOSellError
 from .state import ORDERS, Order
 from .yoomoney import quickpay_url
+from .yoomoney_checker import check_payment_now
 
 DEFAULT_TOPUP=50.0
 REF_PERCENT=1.0
@@ -64,16 +65,42 @@ def register(dp:Dispatcher, bot:Bot, admin_bot:Bot, db:Database, s:Settings):
         except: return await m.answer('❌ Введите сумму числом.')
         minimum=db.topup_min()
         if amount<minimum: return await m.answer(f'❌ Минимум {minimum:.2f} ₽.')
-        if not s.yoomoney_wallet or not s.public_base_url or not s.yoomoney_secret:
+        if not s.yoomoney_wallet or not s.yoomoney_api_token:
             await state.clear(); return await m.answer('⚠️ Пополнение временно недоступно.')
         pid=uuid.uuid4().hex
         label='FROST-'+pid
         db.add_payment(pid,m.from_user.id,amount,label)
         gross=round(amount/0.97,2)
-        url=quickpay_url(s.yoomoney_wallet,gross,label,s.public_base_url+'/payment/return')
-        kb=InlineKeyboardBuilder(); kb.button(text='💳 Оплатить',url=url); kb.button(text='💰 Баланс',callback_data='balance'); kb.adjust(1)
+        success_url=s.public_base_url+'/payment/return' if s.public_base_url else ''
+        url=quickpay_url(s.yoomoney_wallet,gross,label,success_url)
+        kb=InlineKeyboardBuilder()
+        kb.button(text='💳 Оплатить',url=url)
+        kb.button(text='🔄 Проверить оплату',callback_data=f'checkpay:{pid}')
+        kb.button(text='💰 Баланс',callback_data='balance')
+        kb.adjust(1)
         await state.clear()
         await m.answer(f'💳 К оплате: <b>{gross:.2f} ₽</b>\nНа баланс будет зачислено: <b>{amount:.2f} ₽</b>.',reply_markup=kb.as_markup(),parse_mode='HTML')
+
+    @dp.callback_query(F.data.startswith('checkpay:'))
+    async def checkpay(c:CallbackQuery):
+        await c.answer('Проверяю оплату…')
+        payment_id=c.data.split(':',1)[1]
+        row=db.payment(payment_id)
+        if not row or int(row['telegram_id'])!=int(c.from_user.id):
+            return await safe(c,'❌ Платёж не найден.',balance_kb())
+        if row['status']=='credited':
+            return await safe(c,f'✅ <b>Платёж уже зачислен</b>\n\nСумма: <b>{float(row["amount_rub"]):.2f} ₽</b>',balance_kb())
+        if not s.yoomoney_api_token:
+            return await safe(c,'⚠️ Проверка платежа временно недоступна.',balance_kb())
+        try:
+            ok, uid, amount, reason=await check_payment_now(db,s.yoomoney_api_token,payment_id)
+        except Exception:
+            return await safe(c,'⚠️ Не удалось проверить платёж. Попробуйте ещё раз чуть позже.',balance_kb())
+        if ok:
+            return await safe(c,f'✅ <b>Баланс пополнен</b>\n\n<b>+{amount:.2f} ₽</b>',balance_kb())
+        if reason=='amount_mismatch':
+            return await safe(c,'⚠️ Платёж найден, но сумма не совпадает с ожидаемой. Баланс не изменён.',balance_kb())
+        return await safe(c,'⏳ Оплата пока не найдена. После оплаты нажмите «Проверить оплату» ещё раз.',balance_kb())
 
     @dp.callback_query(F.data=='history')
     async def history(c:CallbackQuery):
