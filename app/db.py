@@ -1,6 +1,5 @@
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
 class Database:
     def __init__(self, path: Path):
@@ -20,61 +19,40 @@ class Database:
             c.execute("CREATE TABLE IF NOT EXISTS users (telegram_id INTEGER PRIMARY KEY, username TEXT, first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
             c.execute("CREATE TABLE IF NOT EXISTS balances (telegram_id INTEGER PRIMARY KEY, balance_rub REAL NOT NULL DEFAULT 0)")
             c.execute("""CREATE TABLE IF NOT EXISTS user_rentals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER NOT NULL,
-                rental_uid TEXT NOT NULL UNIQUE,
-                product_id INTEGER,
-                product_name TEXT,
-                duration_hours INTEGER,
-                price_paid_rub REAL DEFAULT 0,
-                refunded INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, rental_uid TEXT NOT NULL UNIQUE,
+                product_id INTEGER, product_name TEXT, duration_hours INTEGER, price_paid_rub REAL DEFAULT 0,
+                refunded INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )""")
             c.execute("""CREATE TABLE IF NOT EXISTS payments (
-                payment_id TEXT PRIMARY KEY,
-                telegram_id INTEGER NOT NULL,
-                amount_rub REAL NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                label TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                credited_at TEXT
+                payment_id TEXT PRIMARY KEY, telegram_id INTEGER NOT NULL, amount_rub REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending', label TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                credited_at TEXT, yoomoney_operation_id TEXT
             )""")
             c.execute("""CREATE TABLE IF NOT EXISTS balance_transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER NOT NULL,
-                kind TEXT NOT NULL,
-                amount_rub REAL NOT NULL,
-                reference TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, kind TEXT NOT NULL,
+                amount_rub REAL NOT NULL, reference TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )""")
             c.execute("""CREATE TABLE IF NOT EXISTS support_tickets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'open',
-                subject TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                closed_at TEXT
+                id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'open',
+                subject TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, closed_at TEXT
             )""")
             c.execute("""CREATE TABLE IF NOT EXISTS support_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticket_id INTEGER NOT NULL,
-                telegram_id INTEGER NOT NULL,
-                is_admin INTEGER NOT NULL DEFAULT 0,
-                text TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ticket_id INTEGER NOT NULL, telegram_id INTEGER NOT NULL,
+                is_admin INTEGER NOT NULL DEFAULT 0, text TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )""")
-            cols = {r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()}
+            cols={r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()}
             if "ref_code" not in cols: c.execute("ALTER TABLE users ADD COLUMN ref_code TEXT")
             if "referred_by" not in cols: c.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
-            rcols = {r[1] for r in c.execute("PRAGMA table_info(user_rentals)").fetchall()}
+            rcols={r[1] for r in c.execute("PRAGMA table_info(user_rentals)").fetchall()}
             if "refunded" not in rcols: c.execute("ALTER TABLE user_rentals ADD COLUMN refunded INTEGER NOT NULL DEFAULT 0")
-            pcols = {r[1] for r in c.execute("PRAGMA table_info(payments)").fetchall()}
+            pcols={r[1] for r in c.execute("PRAGMA table_info(payments)").fetchall()}
             if "label" not in pcols: c.execute("ALTER TABLE payments ADD COLUMN label TEXT")
+            if "yoomoney_operation_id" not in pcols: c.execute("ALTER TABLE payments ADD COLUMN yoomoney_operation_id TEXT")
             c.commit()
 
-    def get(self, k):
+    def get(self,k):
         with self.conn() as c:
-            r = c.execute("SELECT value FROM settings WHERE key=?", (k,)).fetchone()
+            r=c.execute("SELECT value FROM settings WHERE key=?",(k,)).fetchone()
             return r[0] if r else None
     def set(self,k,v):
         with self.conn() as c:
@@ -110,9 +88,11 @@ class Database:
     def credit(self,uid,amount,reference,kind="credit"):
         if amount<=0: raise ValueError("amount must be positive")
         with self.conn() as c:
-            c.execute("BEGIN IMMEDIATE"); c.execute("INSERT OR IGNORE INTO balances(telegram_id,balance_rub) VALUES(?,0)",(uid,))
+            c.execute("BEGIN IMMEDIATE")
+            c.execute("INSERT OR IGNORE INTO balances(telegram_id,balance_rub) VALUES(?,0)",(uid,))
             c.execute("UPDATE balances SET balance_rub=balance_rub+? WHERE telegram_id=?",(amount,uid))
-            c.execute("INSERT INTO balance_transactions(telegram_id,kind,amount_rub,reference) VALUES(?,?,?,?)",(uid,kind,amount,reference)); c.commit()
+            c.execute("INSERT INTO balance_transactions(telegram_id,kind,amount_rub,reference) VALUES(?,?,?,?)",(uid,kind,amount,reference))
+            c.commit()
     def debit(self,uid,amount,reference):
         if amount<=0: raise ValueError("amount must be positive")
         with self.conn() as c:
@@ -132,23 +112,37 @@ class Database:
         with self.conn() as c: return c.execute("SELECT * FROM payments ORDER BY created_at DESC LIMIT ?",(limit,)).fetchall()
     def update_payment_amount(self,payment_id,amount):
         with self.conn() as c:
-            c.execute("UPDATE payments SET amount_rub=? WHERE payment_id=? AND status='pending'",(amount,payment_id)); c.commit()
+            cur=c.execute("UPDATE payments SET amount_rub=? WHERE payment_id=? AND status='pending'",(amount,payment_id)); c.commit()
+            return cur.rowcount==1
     def cancel_payment(self,payment_id):
         with self.conn() as c:
-            c.execute("UPDATE payments SET status='cancelled' WHERE payment_id=? AND status='pending'",(payment_id,)); c.commit()
-    def credit_payment(self,payment_id,expected_received_amount=None):
+            cur=c.execute("UPDATE payments SET status='cancelled' WHERE payment_id=? AND status='pending'",(payment_id,)); c.commit()
+            return cur.rowcount==1
+    def credit_payment_from_yoomoney(self,payment_id,received_amount,operation_id):
         with self.conn() as c:
-            c.execute("BEGIN IMMEDIATE"); row=c.execute("SELECT * FROM payments WHERE payment_id=?",(payment_id,)).fetchone()
-            if not row or row['status']=='credited':
-                c.rollback(); return False,(int(row['telegram_id']) if row else None),(float(row['amount_rub']) if row else None)
-            if expected_received_amount is not None and abs(float(expected_received_amount)-round(float(row['amount_rub']),2))>0.01:
-                c.rollback(); return False,None,None
-            uid=int(row['telegram_id']); amount=float(row['amount_rub'])
+            c.execute("BEGIN IMMEDIATE")
+            row=c.execute("SELECT * FROM payments WHERE payment_id=?",(payment_id,)).fetchone()
+            if not row: c.rollback(); return False,None,None,"not_found"
+            if row["status"]=="credited":
+                c.rollback(); return False,int(row["telegram_id"]),float(row["amount_rub"]),"already_credited"
+            if row["status"]!="pending":
+                c.rollback(); return False,int(row["telegram_id"]),float(row["amount_rub"]),"not_pending"
+            expected=round(float(row["amount_rub"]),2)
+            received=round(float(received_amount),2)
+            if abs(received-expected)>0.01:
+                c.rollback(); return False,int(row["telegram_id"]),expected,"amount_mismatch"
+            op=str(operation_id or "").strip()
+            if op:
+                seen=c.execute("SELECT payment_id FROM payments WHERE yoomoney_operation_id=?",(op,)).fetchone()
+                if seen:
+                    c.rollback(); return False,int(row["telegram_id"]),expected,"duplicate_operation"
+            uid=int(row["telegram_id"])
             c.execute("INSERT OR IGNORE INTO balances(telegram_id,balance_rub) VALUES(?,0)",(uid,))
-            c.execute("UPDATE balances SET balance_rub=balance_rub+? WHERE telegram_id=?",(amount,uid))
-            c.execute("UPDATE payments SET status='credited',credited_at=CURRENT_TIMESTAMP WHERE payment_id=?",(payment_id,))
-            c.execute("INSERT INTO balance_transactions(telegram_id,kind,amount_rub,reference) VALUES(?,?,?,?)",(uid,'credit',amount,f'yoomoney:{payment_id}')); c.commit()
-            return True,uid,amount
+            c.execute("UPDATE balances SET balance_rub=balance_rub+? WHERE telegram_id=?",(expected,uid))
+            c.execute("UPDATE payments SET status='credited',credited_at=CURRENT_TIMESTAMP,yoomoney_operation_id=? WHERE payment_id=?",(op or None,payment_id))
+            c.execute("INSERT INTO balance_transactions(telegram_id,kind,amount_rub,reference) VALUES(?,?,?,?)",(uid,'credit',expected,f'yoomoney:{payment_id}:{op or "unknown"}'))
+            c.commit()
+            return True,uid,expected,"credited"
     def transactions(self,uid,limit=20):
         with self.conn() as c: return c.execute("SELECT kind,amount_rub,reference,created_at FROM balance_transactions WHERE telegram_id=? ORDER BY id DESC LIMIT ?",(uid,limit)).fetchall()
     def add_rental(self,uid,rental_uid,pid,name,hours,price_paid_rub):
@@ -163,7 +157,8 @@ class Database:
             c.execute("BEGIN IMMEDIATE"); row=c.execute("SELECT * FROM user_rentals WHERE id=?",(rental_id,)).fetchone()
             if not row or int(row['refunded']): c.rollback(); return None
             amount=float(row['price_paid_rub']); uid=int(row['telegram_id'])
-            c.execute("UPDATE user_rentals SET refunded=1 WHERE id=?",(rental_id,)); c.execute("INSERT OR IGNORE INTO balances(telegram_id,balance_rub) VALUES(?,0)",(uid,))
+            c.execute("UPDATE user_rentals SET refunded=1 WHERE id=?",(rental_id,))
+            c.execute("INSERT OR IGNORE INTO balances(telegram_id,balance_rub) VALUES(?,0)",(uid,))
             c.execute("UPDATE balances SET balance_rub=balance_rub+? WHERE telegram_id=?",(amount,uid))
             c.execute("INSERT INTO balance_transactions(telegram_id,kind,amount_rub,reference) VALUES(?,?,?,?)",(uid,'refund',amount,f'refund:rental:{row["rental_uid"]}')); c.commit(); return row
     def count_rentals(self):
@@ -175,7 +170,9 @@ class Database:
             cur=c.execute("INSERT INTO support_tickets(telegram_id,subject) VALUES(?,?)",(uid,subject)); c.commit(); return int(cur.lastrowid)
     def add_support_message(self,ticket_id,uid,text,is_admin=False):
         with self.conn() as c:
-            c.execute("INSERT INTO support_messages(ticket_id,telegram_id,is_admin,text) VALUES(?,?,?,?)",(ticket_id,uid,int(is_admin),text)); c.commit()
+            row=c.execute("SELECT status FROM support_tickets WHERE id=?",(ticket_id,)).fetchone()
+            if not row or row["status"]!="open": return False
+            c.execute("INSERT INTO support_messages(ticket_id,telegram_id,is_admin,text) VALUES(?,?,?,?)",(ticket_id,uid,int(is_admin),text)); c.commit(); return True
     def open_ticket(self,uid):
         with self.conn() as c: return c.execute("SELECT * FROM support_tickets WHERE telegram_id=? AND status='open' ORDER BY id DESC LIMIT 1",(uid,)).fetchone()
     def open_tickets(self,limit=30):
@@ -183,4 +180,6 @@ class Database:
     def ticket(self,tid):
         with self.conn() as c: return c.execute("SELECT * FROM support_tickets WHERE id=?",(tid,)).fetchone()
     def close_ticket(self,tid):
-        with self.conn() as c: c.execute("UPDATE support_tickets SET status='closed',closed_at=CURRENT_TIMESTAMP WHERE id=?",(tid,)); c.commit()
+        with self.conn() as c:
+            cur=c.execute("UPDATE support_tickets SET status='closed',closed_at=CURRENT_TIMESTAMP WHERE id=? AND status='open'",(tid,)); c.commit()
+            return cur.rowcount==1
