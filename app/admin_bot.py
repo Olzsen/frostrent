@@ -12,11 +12,11 @@ from .kosell import KOSellError
 from .yoomoney import quickpay_url
 
 class S(StatesGroup):
-    api=State(); markup=State(); reply=State(); pay_edit=State()
+    api=State(); markup=State(); reply=State(); pay_edit=State(); topup_min=State()
 
 def menu():
     kb=InlineKeyboardBuilder()
-    for t,d in [('🔌 API KOSell','api'),('📦 Склад','stock'),('📈 Наценка','markup'),('🛠 Техработы','maintenance'),('👥 Пользователи','users'),('💰 Балансы','balances'),('💳 Пополнения','payments'),('📦 Активные аренды','rentals'),('↩️ Возвраты','refunds'),('🆘 Поддержка','support')]:
+    for t,d in [('🔌 API KOSell','api'),('📦 Склад','stock'),('📈 Наценка','markup'),('💳 Мин. пополнение','topup_min'),('🛠 Техработы','maintenance'),('👥 Пользователи','users'),('💰 Балансы','balances'),('💳 Пополнения','payments'),('📦 Активные аренды','rentals'),('↩️ Возвраты','refunds'),('🆘 Поддержка','support')]:
         kb.button(text=t,callback_data=d)
     kb.adjust(1); return kb.as_markup()
 
@@ -77,7 +77,8 @@ def register(dp:Dispatcher,bot:Bot,db:Database,s:Settings):
         if not is_admin(m.from_user.id,s): return
         try: amount=round(float((m.text or '').replace(',','.')),2)
         except: return await m.answer('Введите сумму числом.')
-        if amount<50: return await m.answer('Минимум 50 ₽.')
+        minimum=db.topup_min()
+        if amount<minimum: return await m.answer(f'Минимум {minimum:.2f} ₽.')
         data=await state.get_data(); pid=data.get('payment_id')
         if not pid or not db.update_payment_amount(pid,amount):
             await state.clear(); return await m.answer('❌ Пополнение уже обработано или не найдено.',reply_markup=menu())
@@ -141,6 +142,16 @@ def register(dp:Dispatcher,bot:Bot,db:Database,s:Settings):
         if not is_admin(c.from_user.id,s): return
         await c.answer(); await state.set_state(S.markup); await c.message.answer(f'Текущая наценка: <b>{markup(db):.2f}%</b>\nВведите новую:',reply_markup=back(),parse_mode='HTML')
 
+    @dp.callback_query(F.data=='topup_min')
+    async def topup_min_start(c:CallbackQuery,state:FSMContext):
+        if not is_admin(c.from_user.id,s): return
+        await c.answer()
+        await state.set_state(S.topup_min)
+        await c.message.answer(f'💳 <b>Минимальное пополнение</b>
+
+Сейчас: <b>{db.topup_min():.2f} ₽</b>
+Введите новую сумму в рублях.',parse_mode='HTML')
+
     @dp.callback_query(F.data=='maintenance')
     async def maintenance_toggle(c:CallbackQuery):
         if not is_admin(c.from_user.id,s): return
@@ -187,6 +198,16 @@ def register(dp:Dispatcher,bot:Bot,db:Database,s:Settings):
         if not is_admin(c.from_user.id,s): return
         rid=int(c.data.split(':',1)[1]); row=db.mark_refunded(rid); await c.answer('Возврат выполнен' if row else 'Уже возвращено')
         await c.message.edit_text('✅ Возврат выполнен.' if row else '❌ Возврат не выполнен.',reply_markup=menu(),parse_mode='HTML')
+
+    @dp.message(S.topup_min)
+    async def topup_min_value(m:Message,state:FSMContext):
+        if not is_admin(m.from_user.id,s): return
+        try: amount=round(float((m.text or '').replace(',','.')),2)
+        except: return await m.answer('Введите сумму числом.')
+        if amount < 1: return await m.answer('Минимум — 1 ₽.')
+        db.set_topup_min(amount)
+        await state.clear()
+        await m.answer(f'✅ Минимальное пополнение установлено: <b>{amount:.2f} ₽</b>.',reply_markup=menu(),parse_mode='HTML')
 
     @dp.message(S.api)
     async def api(m:Message,state:FSMContext):
