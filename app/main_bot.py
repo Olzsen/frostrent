@@ -30,7 +30,7 @@ def menu():
 def balance_kb():
     kb=InlineKeyboardBuilder(); kb.button(text='➕ Пополнить',callback_data='topup'); kb.button(text='📜 История',callback_data='history'); kb.button(text='🏠 Меню',callback_data='home'); kb.adjust(1); return kb.as_markup()
 
-def register(dp:Dispatcher, bot:Bot, db:Database, s:Settings):
+def register(dp:Dispatcher, bot:Bot, admin_bot:Bot, db:Database, s:Settings):
     async def show_balance(c):
         await safe(c,f'💰 <b>Баланс</b>\n\n<b>{db.balance(c.from_user.id):.2f} ₽</b>',balance_kb())
 
@@ -171,7 +171,7 @@ def register(dp:Dispatcher, bot:Bot, db:Database, s:Settings):
                 kb.button(text=f'↩️ Ответить #{t["id"]}',callback_data=f'reply:{t["id"]}')
                 kb.button(text=f'✅ Закрыть #{t["id"]}',callback_data=f'close:{t["id"]}')
                 kb.adjust(1)
-                await bot.send_message(aid,f'🆘 <b>Новый тикет #{t["id"]}</b>\n👤 <code>{m.from_user.id}</code>\n\n{html.escape(text)}',reply_markup=kb.as_markup(),parse_mode='HTML')
+                await admin_bot.send_message(aid,f'🆘 <b>Новый тикет #{t["id"]}</b>\n👤 <code>{m.from_user.id}</code>\n\n{html.escape(text)}',reply_markup=kb.as_markup(),parse_mode='HTML')
             except Exception:
                 pass
         await state.clear()
@@ -223,12 +223,15 @@ def catalog_text(ps,page,db):
     size=6; pages=max(1,(len(ps)+size-1)//size); page=max(0,min(page,pages-1))
     lines=[f'🎮 <b>Каталог</b> • {page+1}/{pages}','🔥 Сначала самые популярные','']
     for p in ps[page*size:(page+1)*size]:
-        lines.append(f"🎮 <b>{html.escape(str(p.get('name','—')))}</b> • {int(p.get('available_accounts') or 0)} шт. • {marked(p.get('price_per_hour_rub',0),markup(db)):.2f} ₽/ч")
+        indicator='🟢' if int(p.get('available_accounts') or 0)>0 else '🔴'
+        lines.append(f"{indicator} <b>{html.escape(str(p.get('name','—')))}</b> • {int(p.get('available_accounts') or 0)} шт. • {marked(p.get('price_per_hour_rub',0),markup(db)):.2f} ₽/ч")
     return '\n'.join(lines)
 
 def catalog_kb(ps,page):
     size=6; pages=max(1,(len(ps)+size-1)//size); page=max(0,min(page,pages-1)); kb=InlineKeyboardBuilder()
-    for p in ps[page*size:(page+1)*size]: kb.button(text='🎮 '+str(p.get('name',''))[:38],callback_data=f'product:{p.get("id")}')
+    for p in ps[page*size:(page+1)*size]:
+        indicator='🟢' if int(p.get('available_accounts') or 0)>0 else '🔴'
+        kb.button(text=indicator+' '+str(p.get('name',''))[:36],callback_data=f'product:{p.get("id")}')
     if page: kb.button(text='◀️',callback_data=f'page:{page-1}')
     if page<pages-1: kb.button(text='▶️',callback_data=f'page:{page+1}')
     kb.button(text='🏠 Меню',callback_data='home'); kb.adjust(1,2,1); return kb.as_markup()
