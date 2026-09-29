@@ -62,9 +62,11 @@ def register(dp:Dispatcher, bot:Bot, db:Database, s:Settings):
         try: amount=round(float((m.text or '').replace(',','.')),2)
         except: return await m.answer('❌ Введите сумму числом.')
         if amount<MIN_TOPUP: return await m.answer(f'❌ Минимум {MIN_TOPUP:.0f} ₽.')
-        if not s.yoomoney_wallet or not s.public_base_url:
+        if not s.yoomoney_wallet or not s.public_base_url or not s.yoomoney_secret:
             await state.clear(); return await m.answer('⚠️ Пополнение временно недоступно.')
-        pid=uuid.uuid4().hex; label='FROST-'+pid; db.add_payment(pid,m.from_user.id,amount,label)
+        pid=uuid.uuid4().hex
+        label='FROST-'+pid
+        db.add_payment(pid,m.from_user.id,amount,label)
         gross=round(amount/0.97,2)
         url=quickpay_url(s.yoomoney_wallet,gross,label,s.public_base_url+'/payment/return')
         kb=InlineKeyboardBuilder(); kb.button(text='💳 Оплатить',url=url); kb.button(text='💰 Баланс',callback_data='balance'); kb.adjust(1)
@@ -101,8 +103,7 @@ def register(dp:Dispatcher, bot:Bot, db:Database, s:Settings):
     async def rent(c:CallbackQuery):
         await c.answer(); pid=int(c.data.split(':')[1]); ps=await client(db,s).products(); p=next((x for x in ps if int(x.get('id'))==pid),None)
         if not p:return await safe(c,'❌ Товар не найден.',menu())
-        kb=InlineKeyboardBuilder()
-        mn=int(p.get('min_hours') or 1); mx=int(p.get('max_hours') or 1)
+        kb=InlineKeyboardBuilder(); mn=int(p.get('min_hours') or 1); mx=int(p.get('max_hours') or 1)
         for h in [1,3,6,12,24,48,72,168]:
             if mn<=h<=mx: kb.button(text=f'⏱ {h} ч.',callback_data=f'quote:{pid}:{h}')
         kb.button(text='⬅️ Назад',callback_data=f'product:{pid}'); kb.adjust(2)
@@ -146,23 +147,41 @@ def register(dp:Dispatcher, bot:Bot, db:Database, s:Settings):
 
     @dp.callback_query(F.data=='support')
     async def support(c:CallbackQuery,state:FSMContext):
-        await c.answer(); t=db.open_ticket(c.from_user.id); tid=int(t['id']) if t else db.create_ticket(c.from_user.id)
-        await state.set_state(S.support); await c.message.answer(f'🆘 Тикет #{tid}. Напишите сообщение.',parse_mode='HTML')
+        await c.answer()
+        existing=db.open_ticket(c.from_user.id)
+        if existing:
+            await safe(c,f'🆘 <b>Тикет #{existing["id"]}</b> уже открыт. Новое обращение можно отправить после ответа/закрытия текущего тикета.',menu()); return
+        tid=db.create_ticket(c.from_user.id)
+        await state.set_state(S.support)
+        await c.message.answer(f'🆘 <b>Тикет #{tid}</b>\n\nОпишите проблему одним сообщением. После отправки тикет уйдёт в панель администратора.',parse_mode='HTML')
 
     @dp.message(S.support)
     async def support_msg(m:Message,state:FSMContext):
-        t=db.open_ticket(m.from_user.id); tid=int(t['id']) if t else db.create_ticket(m.from_user.id)
-        text=m.text or m.caption or '[медиа]'; db.add_support_message(tid,m.from_user.id,text)
+        t=db.open_ticket(m.from_user.id)
+        if not t:
+            await state.clear(); return await m.answer('❌ Этот тикет уже закрыт. Откройте поддержку заново.',reply_markup=menu())
+        text=m.text or m.caption or '[медиа]'
+        if not db.add_support_message(int(t['id']),m.from_user.id,text,False):
+            await state.clear(); return await m.answer('❌ Этот тикет уже закрыт.',reply_markup=menu())
         for aid in s.admin_ids:
-            try: await bot.send_message(aid,f'🆘 <b>Тикет #{tid}</b>\n<code>{m.from_user.id}</code>\n\n{html.escape(text)}',parse_mode='HTML')
-            except: pass
-        await state.clear(); await m.answer('✅ Сообщение отправлено.',reply_markup=menu())
+            try:
+                kb=InlineKeyboardBuilder()
+                kb.button(text=f'↩️ Ответить #{t["id"]}',callback_data=f'reply:{t["id"]}')
+                kb.button(text=f'✅ Закрыть #{t["id"]}',callback_data=f'close:{t["id"]}')
+                kb.adjust(1)
+                await bot.send_message(aid,f'🆘 <b>Новый тикет #{t["id"]}</b>\n👤 <code>{m.from_user.id}</code>\n\n{html.escape(text)}',reply_markup=kb.as_markup(),parse_mode='HTML')
+            except Exception:
+                pass
+        await state.clear()
+        await m.answer(f'✅ Тикет #{t["id"]} отправлен в поддержку.',reply_markup=menu())
 
     @dp.message(S.search)
     async def search(m:Message,state:FSMContext):
         q=(m.text or '').strip(); await state.clear()
         try:
-            ps=await client(db,s).products(q); kb=InlineKeyboardBuilder()
+            ps=await client(db,s).products(q)
+            ps=sort_products(ps,db)
+            kb=InlineKeyboardBuilder()
             for p in ps[:15]: kb.button(text='🎮 '+str(p.get('name',''))[:35],callback_data=f'product:{p.get("id")}')
             kb.adjust(1); await m.answer(f'🔎 Найдено: <b>{len(ps)}</b>',reply_markup=kb.as_markup(),parse_mode='HTML')
         except KOSellError: await m.answer('⚠️ Поиск временно недоступен.')
@@ -175,16 +194,32 @@ def register(dp:Dispatcher, bot:Bot, db:Database, s:Settings):
 
 async def catalog_msg(m,db,s):
     try:
-        ps=await client(db,s).products(); await m.answer(catalog_text(ps,0,db),reply_markup=catalog_kb(ps,0),parse_mode='HTML')
+        ps=sort_products(await client(db,s).products(),db)
+        await m.answer(catalog_text(ps,0,db),reply_markup=catalog_kb(ps,0),parse_mode='HTML')
     except KOSellError as e: await m.answer('⚠️ '+html.escape(str(e)),parse_mode='HTML')
 
 async def catalog_edit(c,db,s,page):
-    try: ps=await client(db,s).products(); await safe(c,catalog_text(ps,page,db),catalog_kb(ps,page))
+    try:
+        ps=sort_products(await client(db,s).products(),db)
+        await safe(c,catalog_text(ps,page,db),catalog_kb(ps,page))
     except KOSellError as e: await safe(c,'⚠️ '+html.escape(str(e)),menu())
+
+def sort_products(ps,db):
+    def popularity(p):
+        for key in ('rent_count','rental_count','sales_count','sold_count','orders_count','popularity'):
+            try:
+                if p.get(key) is not None: return float(p.get(key))
+            except: pass
+        for key in ('available_accounts','stock'):
+            try:
+                if p.get(key) is not None: return 0.0
+            except: pass
+        return 0.0
+    return sorted(list(ps),key=popularity,reverse=True)
 
 def catalog_text(ps,page,db):
     size=6; pages=max(1,(len(ps)+size-1)//size); page=max(0,min(page,pages-1))
-    lines=[f'🎮 <b>Каталог</b> • {page+1}/{pages}','']
+    lines=[f'🎮 <b>Каталог</b> • {page+1}/{pages}','🔥 Сначала самые популярные','']
     for p in ps[page*size:(page+1)*size]:
         lines.append(f"🎮 <b>{html.escape(str(p.get('name','—')))}</b> • {int(p.get('available_accounts') or 0)} шт. • {marked(p.get('price_per_hour_rub',0),markup(db)):.2f} ₽/ч")
     return '\n'.join(lines)
