@@ -25,13 +25,21 @@ def create_app(db, settings, main_bot=None):
         form_data = await request.form()
         form = {str(k): str(v) for k, v in form_data.items()}
 
-        signature_ok = verify_notification(form, settings.yoomoney_secret)
         notification_type = str(form.get("notification_type") or "")
         operation_id = str(form.get("operation_id") or "").strip()
         label = str(form.get("label") or "").strip()
         amount_raw = str(form.get("amount") or "").replace(",", ".")
         withdraw_raw = str(form.get("withdraw_amount") or "").replace(",", ".")
         test_notification = str(form.get("test_notification") or "").lower() == "true"
+
+        # YooMoney's dashboard test notification may be sent without
+        # transaction fields/signature. It must only return 200 and never
+        # touch balances or payments.
+        if test_notification:
+            logger.info("YooMoney test webhook received: 200 OK")
+            return HTMLResponse("ok", status_code=200)
+
+        signature_ok = verify_notification(form, settings.yoomoney_secret)
 
         logger.info(
             "YooMoney webhook type=%s op=%s amount=%s withdraw=%s currency=%s label=%s test=%s signature_ok=%s",
@@ -42,9 +50,6 @@ def create_app(db, settings, main_bot=None):
         if not signature_ok:
             logger.warning("YooMoney webhook rejected: invalid signature")
             return HTMLResponse("invalid signature", status_code=403)
-
-        if test_notification:
-            return HTMLResponse("ok", status_code=200)
 
         if notification_type not in {"p2p-incoming", "card-incoming"}:
             logger.info("YooMoney webhook ignored: unsupported notification_type=%s", notification_type)
