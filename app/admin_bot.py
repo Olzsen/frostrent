@@ -147,10 +147,7 @@ def register(dp:Dispatcher,bot:Bot,db:Database,s:Settings):
         if not is_admin(c.from_user.id,s): return
         await c.answer()
         await state.set_state(S.topup_min)
-        await c.message.answer(f'💳 <b>Минимальное пополнение</b>
-
-Сейчас: <b>{db.topup_min():.2f} ₽</b>
-Введите новую сумму в рублях.',parse_mode='HTML')
+        await c.message.answer(f'💳 <b>Минимальное пополнение</b>\n\nСейчас: <b>{db.topup_min():.2f} ₽</b>\nВведите новую сумму в рублях.',parse_mode='HTML')
 
     @dp.callback_query(F.data=='maintenance')
     async def maintenance_toggle(c:CallbackQuery):
