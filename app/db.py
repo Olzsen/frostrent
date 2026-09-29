@@ -184,6 +184,8 @@ class Database:
         with self.conn() as c: return c.execute("SELECT * FROM support_tickets WHERE telegram_id=? AND status='open' ORDER BY id DESC LIMIT 1",(uid,)).fetchone()
     def open_tickets(self,limit=30):
         with self.conn() as c: return c.execute("SELECT * FROM support_tickets WHERE status='open' ORDER BY id DESC LIMIT ?",(limit,)).fetchall()
+    def support_history(self,tid,limit=50):
+        with self.conn() as c: return c.execute("SELECT * FROM support_messages WHERE ticket_id=? ORDER BY id ASC LIMIT ?",(tid,limit)).fetchall()
     def ticket(self,tid):
         with self.conn() as c: return c.execute("SELECT * FROM support_tickets WHERE id=?",(tid,)).fetchone()
     def close_ticket(self,tid):
