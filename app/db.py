@@ -54,6 +54,13 @@ class Database:
         with self.conn() as c:
             r=c.execute("SELECT value FROM settings WHERE key=?",(k,)).fetchone()
             return r[0] if r else None
+    def topup_min(self):
+        try: return max(1.0, round(float(self.get("topup_min") or 50), 2))
+        except (TypeError, ValueError): return 50.0
+    def set_topup_min(self, amount):
+        amount=round(float(amount), 2)
+        if amount < 1: raise ValueError("minimum topup must be at least 1")
+        self.set("topup_min", amount)
     def set(self,k,v):
         with self.conn() as c:
             c.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(k,str(v))); c.commit()
